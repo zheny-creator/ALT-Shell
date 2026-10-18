@@ -11,7 +11,7 @@ alt: main.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 test: alt
-	./tests/smoke.sh
+	sh ./tests/smoke.sh
 
 install: alt
 	install -Dm755 alt "$(DESTDIR)$(BINDIR)/alt"

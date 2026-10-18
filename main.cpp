@@ -704,7 +704,9 @@ private:
                 pid_t pid = ::fork();
                 if (pid < 0) { std::cerr << "recall: fork: " << std::strerror(errno) << '\\n'; return 1; }
                 if (pid == 0) {
+                    std::string companionArg0 = companion.string();
                     std::vector<char*> args;
+                    args.push_back(companionArg0.data());
                     for (size_t i = 1; i < a.size(); ++i) args.push_back(const_cast<char*>(a[i].c_str()));
                     args.push_back(nullptr);
                     ::execv(companion.c_str(), args.data());

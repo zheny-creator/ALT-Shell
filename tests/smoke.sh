@@ -27,6 +27,12 @@ capsule load work
 printf 'loaded=%s\n' "$ALT_CAPSULE_TEST"
 printf 'pipeline-ok\n' | grep pipeline-ok
 false; echo status=$?
+true && echo and-ok
+false && echo and-bad
+false || echo or-ok
+true || echo or-bad
+false && echo skipped || echo fallback
+true || echo skipped && echo left-to-right-ok
 sh -c 'echo captured-error >&2' 2> "$ALT_TEST_TMP/work/stderr.txt"
 exit
 INPUT

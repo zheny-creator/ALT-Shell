@@ -46,7 +46,7 @@ A capsule stores only the directory and variable names explicitly passed to `sav
 Other examples:
 
 ```sh
-printf 'hello\\n' | grep hello
+printf 'hello\n' | grep hello
 ls -la > listing.txt
 cat < listing.txt
 sleep 5 &

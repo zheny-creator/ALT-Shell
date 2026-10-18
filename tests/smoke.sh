@@ -39,4 +39,28 @@ printf '%s\n' "$OUT" | grep -q 'loaded=before'
 printf '%s\n' "$OUT" | grep -q 'pipeline-ok'
 printf '%s\n' "$OUT" | grep -q 'status=1'
 grep -q 'captured-error' "$TMP/work/stderr.txt"
+
+# Check that sandbox-mode policies are applied before forking a command, and that a
+# relative redirection cannot escape the current workspace. Does not require bwrap.
+mkdir -p "$TMP/restrict-work" "$TMP/restrict-config/alt-shell"
+cat > "$TMP/restrict-config/alt-shell/config" <<'CONF'
+container.enabled=true
+container.network=false
+container.workspace_writable=true
+container.readonly_paths=/usr,/etc,/bin,/sbin,/lib,/lib64
+container.allowed_commands=not-a-real-command
+container.pass_env=TERM,LANG,LC_ALL,USER,LOGNAME,EDITOR
+CONF
+RC=0
+OUT2=$(cd "$TMP/restrict-work" && XDG_CONFIG_HOME="$TMP/restrict-config" XDG_DATA_HOME="$TMP/restrict-data" "$ROOT/alt" 2>&1 <<'INPUT'
+ls
+echo escaped > ../escaped.txt
+exit
+INPUT
+) || RC=$?
+[ "$RC" -eq 126 ]
+printf '%s\n' "$OUT2" | grep -q 'blocked by container.allowed_commands'
+printf '%s\n' "$OUT2" | grep -q 'redirections must stay inside the current workspace'
+[ ! -e "$TMP/escaped.txt" ]
+
 printf '%s\n' 'ALT-Shell smoke tests passed.'

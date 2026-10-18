@@ -588,14 +588,6 @@ private:
         enum class Quote { None, Single, Double } quote = Quote::None;
         enum class Next { Always, OnSuccess, OnFailure } next = Next::Always;
         size_t begin = 0;
-        auto runChunk = [&](size_t end, Next following, bool background) {
-            const bool shouldRun = next == Next::Always ||
-                (next == Next::OnSuccess && lastStatus_ == 0) ||
-                (next == Next::OnFailure && lastStatus_ != 0);
-            if (shouldRun) executeChunk(line.substr(begin, end - begin), background, error);
-            next = following;
-            begin = end + (background ? 1 : (following == Next::Always ? 1 : 2));
-        };
         for (size_t i = 0; i < line.size(); ++i) {
             const char c = line[i];
             if (quote == Quote::Single) {

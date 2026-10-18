@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <algorithm>
 #include <cerrno>
@@ -329,6 +330,10 @@ public:
         ::chmod(dataDir().c_str(), 0700);
         loadConfig();
         loadHistory();
+        // ALT-Shell exposes a shell-specific command journal protocol for companion tools.
+        const std::string journal = (dataDir() / "recall.journal").string();
+        ::setenv("ALT_SHELL_RECALL_PROTOCOL", "ALT-RECALL/1", 1);
+        ::setenv("ALT_SHELL_RECALL_JOURNAL", journal.c_str(), 1);
         if (interactive_) {
             std::signal(SIGINT, SIG_IGN);
             std::signal(SIGQUIT, SIG_IGN);
@@ -525,6 +530,21 @@ private:
         return out.str();
     }
 
+    // Private companion-tool ABI: ALT-RECALL/1 tab-separated records.
+    // Fields: protocol, event, unix-ms, status, hex(cwd), hex(command).
+    // Hex encoding keeps arbitrary command text and paths unambiguous.
+    void journalEvent(const char* event, const std::string& command, int status) const {
+        const fs::path file = dataDir() / "recall.journal";
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::ofstream out(file, std::ios::app);
+        if (!out) return; // Observability must never prevent a command from running.
+        out << "ALT-RECALL/1\t" << event << '\t' << now << '\t' << status << '\t'
+            << hexEncode(fs::current_path().string()) << '\t' << hexEncode(command) << '\n';
+        out.close();
+        ::chmod(file.c_str(), 0600);
+    }
+
     void loadHistory() {
         std::ifstream in(dataDir() / "history");
         std::string line;
@@ -559,7 +579,9 @@ private:
         if (!lexLine(raw, lastStatus_, tokens, error)) return;
         Job job;
         if (!parseJob(tokens, background, job, error)) return;
+        journalEvent("BEGIN", raw, -1);
         lastStatus_ = executeJob(job);
+        journalEvent("END", raw, lastStatus_);
     }
 
     void executeLine(const std::string& line, std::string& error) {
@@ -607,6 +629,8 @@ private:
                       << "  capsule diff NAME           compare it with the current context\n"
                       << "  history [N]           show recent commands\n"
                       << "  recall TEXT           find commands in history containing TEXT\n"
+                      << "  Companion API: ALT_SHELL_RECALL_PROTOCOL=ALT-RECALL/1\n"
+                      << "  Event journal: $XDG_DATA_HOME/alt-shell/recall.journal (mode 0600)\n"
                       << "  env                   print environment variables\n"
                       << "  export NAME=VALUE     set an environment variable for this shell\n"
                       << "  pwd, clear, version, help, exit\n\n"
@@ -663,14 +687,45 @@ private:
             return 0;
         }
         if (name == "recall") {
-            if (a.size() < 2) { std::cerr << "usage: recall TEXT\n"; return 2; }
+            if (a.size() >= 2 && (a[1] == "timeline" || a[1] == "search" || a[1] == "last" ||
+                                  a[1] == "status" || a[1] == "checkpoint" || a[1] == "restore" ||
+                                  a[1] == "undo")) {
+                // Companion runs from the per-user ALT-Shell data directory; it consumes only
+                // the shell's journal protocol and never executes the recorded commands.
+                const fs::path companion = dataDir() / "recall";
+                struct stat st{};
+                if (::stat(companion.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
+                    st.st_uid != getuid() || (st.st_mode & (S_IWGRP | S_IWOTH))) {
+                    std::cerr << "recall: proprietary companion is missing or has unsafe permissions: "
+                              << companion << "\\n";
+                    std::cerr << "Build the private recall.cpp and install it there with mode 0700.\\n";
+                    return 127;
+                }
+                pid_t pid = ::fork();
+                if (pid < 0) { std::cerr << "recall: fork: " << std::strerror(errno) << '\\n'; return 1; }
+                if (pid == 0) {
+                    std::string companionArg0 = companion.string();
+                    std::vector<char*> args;
+                    args.push_back(companionArg0.data());
+                    for (size_t i = 1; i < a.size(); ++i) args.push_back(const_cast<char*>(a[i].c_str()));
+                    args.push_back(nullptr);
+                    ::execv(companion.c_str(), args.data());
+                    _exit(errno == ENOENT ? 127 : 126);
+                }
+                int status = 0;
+                while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+                if (WIFEXITED(status)) return WEXITSTATUS(status);
+                if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+                return 1;
+            }
+            if (a.size() < 2) { std::cerr << "usage: recall TEXT | recall timeline|search|last|status|checkpoint|restore|undo ...\\n"; return 2; }
             std::string needle;
             for (size_t i = 1; i < a.size(); ++i) { if (!needle.empty()) needle += ' '; needle += a[i]; }
             size_t found = 0;
             for (size_t i = 0; i < history_.size(); ++i) if (history_[i].find(needle) != std::string::npos) {
-                std::cout << (i + 1) << "  " << history_[i] << '\n'; ++found;
+                std::cout << (i + 1) << "  " << history_[i] << '\\n'; ++found;
             }
-            if (!found) std::cout << "No history entries contain: " << needle << '\n';
+            if (!found) std::cout << "No history entries contain: " << needle << '\\n';
             return 0;
         }
         if (name == "env") {

@@ -1,0 +1,21 @@
+name: Build and test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "feat/**"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Build
+        run: make
+      - name: Smoke tests
+        run: make test
+      - name: Interactive line-editor tests
+        run: python3 tests/line_editor.py ./alt

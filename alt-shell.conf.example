@@ -1,0 +1,31 @@
+# ALT-Shell sandbox configuration
+# Copy to ~/.config/alt-shell/config. The shell creates this file on first run.
+# Format: key=value, comma-separated lists, '#' starts a comment.
+
+# Run every external command through Bubblewrap. If bwrap is missing, commands fail closed.
+container.enabled=true
+
+# Disable network namespace by default. Set true only when commands need networking.
+container.network=false
+
+# The directory from which ALT-Shell was started becomes /workspace.
+# Do not start ALT-Shell from $HOME if you intend to expose only one project.
+container.workspace_writable=true
+
+# System directories visible read-only inside the sandbox.
+container.readonly_paths=/usr,/etc,/bin,/sbin,/lib,/lib64
+
+# Optional extra host directories, mounted read-only under /mnt/alt-ro-0, /mnt/alt-ro-1, ...
+# Use absolute paths; ~/ is expanded.
+container.extra_readonly=
+
+# Optional extra host directories, mounted writable under /mnt/alt-rw-0, /mnt/alt-rw-1, ...
+# Treat these as explicit access grants.
+container.extra_writable=
+
+# Optional command allowlist. Empty means any command can run inside the sandbox.
+# Example: ls,cat,grep,git,make,g++,python3
+container.allowed_commands=
+
+# Only variables in this list are passed to sandboxed programs. HOME and PATH are set internally.
+container.pass_env=TERM,LANG,LC_ALL,USER,LOGNAME,EDITOR

@@ -11,6 +11,9 @@
 #include <iostream>
 #include <limits.h>
 #include <map>
+#include <optional>
+#include <poll.h>
+#include <termios.h>
 #include <pwd.h>
 #include <sstream>
 #include <string>
@@ -25,7 +28,7 @@ extern char** environ;
 namespace fs = std::filesystem;
 
 namespace {
-constexpr const char* VERSION = "0.1.0";
+constexpr const char* VERSION = "0.2.0";
 
 struct Token {
     enum class Type { Word, Pipe, In, Out, Append, ErrOut, Semi, Amp } type;
@@ -63,6 +66,69 @@ fs::path dataDir() {
     if (xdg && *xdg) return fs::path(xdg) / "alt-shell";
     return fs::path(homeDir()) / ".local" / "share" / "alt-shell";
 }
+
+
+std::string trim(const std::string& s);
+
+std::vector<std::string> splitCsv(const std::string& value) {
+    std::vector<std::string> out;
+    std::istringstream in(value);
+    std::string item;
+    while (std::getline(in, item, ',')) {
+        item = trim(item);
+        if (!item.empty()) out.push_back(item);
+    }
+    return out;
+}
+
+bool parseBool(const std::string& value, bool fallback) {
+    std::string v = value;
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (v == "1" || v == "true" || v == "yes" || v == "on") return true;
+    if (v == "0" || v == "false" || v == "no" || v == "off") return false;
+    return fallback;
+}
+
+std::string expandConfigPath(std::string value) {
+    if (value == "~") return homeDir();
+    if (value.rfind("~/", 0) == 0) return (fs::path(homeDir()) / value.substr(2)).string();
+    return value;
+}
+
+struct ShellConfig {
+    bool containerEnabled = true;
+    bool containerNetwork = false;
+    bool workspaceWritable = true;
+    std::vector<std::string> readonlyPaths = {"/usr", "/etc", "/bin", "/sbin", "/lib", "/lib64"};
+    std::vector<std::string> extraReadonlyPaths;
+    std::vector<std::string> extraWritablePaths;
+    std::vector<std::string> allowedCommands;
+    std::vector<std::string> passEnvironment = {"TERM", "LANG", "LC_ALL", "USER", "LOGNAME", "EDITOR"};
+};
+
+size_t previousUtf8Boundary(const std::string& value, size_t pos) {
+    if (pos == 0) return 0;
+    --pos;
+    while (pos > 0 && (static_cast<unsigned char>(value[pos]) & 0xC0) == 0x80) --pos;
+    return pos;
+}
+
+size_t nextUtf8Boundary(const std::string& value, size_t pos) {
+    if (pos >= value.size()) return value.size();
+    ++pos;
+    while (pos < value.size() && (static_cast<unsigned char>(value[pos]) & 0xC0) == 0x80) ++pos;
+    return pos;
+}
+
+size_t utf8Columns(const std::string& value, size_t end) {
+    end = std::min(end, value.size());
+    size_t columns = 0;
+    for (size_t i = 0; i < end; ++i) {
+        if ((static_cast<unsigned char>(value[i]) & 0xC0) != 0x80) ++columns;
+    }
+    return columns;
+}
+
 
 std::string trim(const std::string& s) {
     const auto first = s.find_first_not_of(" \t\r\n");
@@ -261,6 +327,7 @@ public:
         fs::create_directories(dataDir(), ec);
         ::chmod(configDir().c_str(), 0700);
         ::chmod(dataDir().c_str(), 0700);
+        loadConfig();
         loadHistory();
         if (interactive_) {
             std::signal(SIGINT, SIG_IGN);
@@ -270,12 +337,9 @@ public:
 
     int run() {
         while (!shouldExit_) {
-            if (interactive_) { std::cout << prompt() << std::flush; }
-            std::string line;
-            if (!std::getline(std::cin, line)) {
-                if (interactive_) std::cout << '\n';
-                break;
-            }
+            auto input = readCommandLine();
+            if (!input.has_value()) break;
+            const std::string& line = *input;
             if (trim(line).empty()) continue;
             addHistory(line);
             std::string error;
@@ -285,7 +349,6 @@ public:
         saveHistory();
         return lastStatus_;
     }
-
 private:
     bool interactive_ = false;
     bool shouldExit_ = false;
@@ -293,6 +356,157 @@ private:
     int requestedExit_ = 0;
     std::vector<std::string> history_;
     std::vector<std::string> previousDirs_;
+    ShellConfig config_;
+
+    void loadConfig() {
+        const fs::path file = configDir() / "config";
+        if (!fs::exists(file)) {
+            std::ofstream out(file);
+            out << "# ALT-Shell configuration. One key=value per line; # starts a comment.\n"
+                << "# External commands use bubblewrap when container.enabled=true.\n"
+                << "container.enabled=true\n"
+                << "container.network=false\n"
+                << "container.workspace_writable=true\n"
+                << "container.readonly_paths=/usr,/etc,/bin,/sbin,/lib,/lib64\n"
+                << "container.extra_readonly=\n"
+                << "container.extra_writable=\n"
+                << "container.allowed_commands=\n"
+                << "container.pass_env=TERM,LANG,LC_ALL,USER,LOGNAME,EDITOR\n";
+            out.close();
+            ::chmod(file.c_str(), 0600);
+        }
+        std::ifstream in(file);
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto comment = line.find('#');
+            if (comment != std::string::npos) line.erase(comment);
+            line = trim(line);
+            if (line.empty()) continue;
+            const auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            const std::string key = trim(line.substr(0, eq));
+            const std::string value = trim(line.substr(eq + 1));
+            if (key == "container.enabled") config_.containerEnabled = parseBool(value, config_.containerEnabled);
+            else if (key == "container.network") config_.containerNetwork = parseBool(value, config_.containerNetwork);
+            else if (key == "container.workspace_writable") config_.workspaceWritable = parseBool(value, config_.workspaceWritable);
+            else if (key == "container.readonly_paths") config_.readonlyPaths = splitCsv(value);
+            else if (key == "container.extra_readonly") config_.extraReadonlyPaths = splitCsv(value);
+            else if (key == "container.extra_writable") config_.extraWritablePaths = splitCsv(value);
+            else if (key == "container.allowed_commands") config_.allowedCommands = splitCsv(value);
+            else if (key == "container.pass_env") config_.passEnvironment = splitCsv(value);
+        }
+        for (auto* list : {&config_.readonlyPaths, &config_.extraReadonlyPaths, &config_.extraWritablePaths}) {
+            for (auto& path : *list) path = expandConfigPath(path);
+        }
+    }
+
+    std::optional<std::string> readCommandLine() {
+        if (!interactive_) {
+            std::string line;
+            if (std::getline(std::cin, line)) return line;
+            return std::nullopt;
+        }
+        termios original{};
+        if (::tcgetattr(STDIN_FILENO, &original) != 0) {
+            std::cout << prompt() << std::flush;
+            std::string line;
+            if (std::getline(std::cin, line)) return line;
+            return std::nullopt;
+        }
+        termios raw = original;
+        raw.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO | ISIG));
+        raw.c_iflag &= static_cast<tcflag_t>(~(IXON | ICRNL));
+        raw.c_cc[VMIN] = 1;
+        raw.c_cc[VTIME] = 0;
+        if (::tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) return std::nullopt;
+        struct RestoreTerminal {
+            termios old;
+            ~RestoreTerminal() { ::tcsetattr(STDIN_FILENO, TCSAFLUSH, &old); }
+        } restore{original};
+
+        std::string line;
+        size_t cursor = 0;
+        size_t historyPos = history_.size();
+        std::string draft;
+        auto redraw = [&]() {
+            std::cout << '\r' << "\033[2K" << prompt() << line;
+            const size_t right = utf8Columns(line, line.size()) - utf8Columns(line, cursor);
+            if (right) std::cout << "\033[" << right << 'D';
+            std::cout << std::flush;
+        };
+        redraw();
+        while (true) {
+            char ch = 0;
+            const ssize_t got = ::read(STDIN_FILENO, &ch, 1);
+            if (got <= 0) { std::cout << "\r\n"; return std::nullopt; }
+            if (ch == '\r' || ch == '\n') { std::cout << "\r\n" << std::flush; return line; }
+            if (ch == 3) { lastStatus_ = 130; line.clear(); std::cout << "^C\r\n"; return line; }
+            if (ch == 4) {
+                if (line.empty()) { std::cout << "\r\n"; return std::nullopt; }
+                if (cursor < line.size()) line.erase(cursor, nextUtf8Boundary(line, cursor) - cursor);
+                redraw(); continue;
+            }
+            if (ch == 1) { cursor = 0; redraw(); continue; }
+            if (ch == 5) { cursor = line.size(); redraw(); continue; }
+            if (ch == 11) { line.erase(cursor); redraw(); continue; }
+            if (ch == 21) { line.erase(0, cursor); cursor = 0; redraw(); continue; }
+            if (ch == 12) { std::cout << "\033[2J\033[H"; redraw(); continue; }
+            if (ch == 23) {
+                while (cursor > 0 && line[cursor - 1] == ' ') cursor = previousUtf8Boundary(line, cursor);
+                while (cursor > 0 && line[cursor - 1] != ' ') cursor = previousUtf8Boundary(line, cursor);
+                line.erase(cursor, line.size() - cursor);
+                redraw(); continue;
+            }
+            if (ch == 127 || ch == 8) {
+                if (cursor > 0) { size_t prev = previousUtf8Boundary(line, cursor); line.erase(prev, cursor - prev); cursor = prev; }
+                redraw(); continue;
+            }
+            if (ch == 27) {
+                pollfd pfd{STDIN_FILENO, POLLIN, 0};
+                if (::poll(&pfd, 1, 40) <= 0) continue;
+                char seq1 = 0;
+                if (::read(STDIN_FILENO, &seq1, 1) != 1 || seq1 != '[') continue;
+                std::string seq;
+                while (seq.size() < 8) {
+                    pollfd pfd2{STDIN_FILENO, POLLIN, 0};
+                    if (::poll(&pfd2, 1, 40) <= 0) break;
+                    char part = 0;
+                    if (::read(STDIN_FILENO, &part, 1) != 1) break;
+                    seq += part;
+                    if ((part >= 'A' && part <= 'Z') || part == '~') break;
+                }
+                if (seq == "A") {
+                    if (historyPos > 0) {
+                        if (historyPos == history_.size()) draft = line;
+                        --historyPos; line = history_[historyPos]; cursor = line.size();
+                    }
+                } else if (seq == "B") {
+                    if (historyPos < history_.size()) {
+                        ++historyPos;
+                        if (historyPos == history_.size()) line = draft;
+                        else line = history_[historyPos];
+                        cursor = line.size();
+                    }
+                } else if (seq == "C") {
+                    cursor = nextUtf8Boundary(line, cursor);
+                } else if (seq == "D") {
+                    cursor = previousUtf8Boundary(line, cursor);
+                } else if (seq == "H" || seq == "1~" || seq == "7~") {
+                    cursor = 0;
+                } else if (seq == "F" || seq == "4~" || seq == "8~") {
+                    cursor = line.size();
+                } else if (seq == "3~" && cursor < line.size()) {
+                    line.erase(cursor, nextUtf8Boundary(line, cursor) - cursor);
+                }
+                redraw(); continue;
+            }
+            if (static_cast<unsigned char>(ch) >= 32) {
+                line.insert(cursor, 1, ch);
+                ++cursor;
+                redraw();
+            }
+        }
+    }
 
     std::string prompt() const {
         char host[256] = "machine";
@@ -378,7 +592,10 @@ private:
         if (a.empty()) return 0;
         const std::string& name = a[0];
         if (name == "help") {
-            std::cout << "ALT-Shell " << VERSION << " — a small Linux shell with context capsules\n\n"
+            std::cout << "ALT-Shell " << VERSION << " — a Linux shell with context capsules and sandboxing\n\n"
+                      << "Interactive editing: Up/Down history, Left/Right cursor, Home/End, Delete/Backspace, Ctrl+A/E/U/K/W/L.\n"
+                      << "Config: ~/.config/alt-shell/config (respects XDG_CONFIG_HOME).\n"
+                      << "External commands use bubblewrap by default; missing bwrap fails closed.\n\n"
                       << "Commands:\n"
                       << "  cd [DIR]              change directory (default: HOME)\n"
                       << "  croot                 jump to the nearest parent containing .git\n"
@@ -394,7 +611,8 @@ private:
                       << "  export NAME=VALUE     set an environment variable for this shell\n"
                       << "  pwd, clear, version, help, exit\n\n"
                       << "Syntax: pipelines (|), input/output redirection (<, >, >>, 2>), ; and background (&).\n"
-                      << "Expansions: $NAME, braced variables, $?, $$, and ~. No job control or command substitution yet.\n";
+                      << "Expansions: $NAME, braced variables, $?, $, and ~. No job control or command substitution yet.\n"
+                      << "Sandbox options: network, writable workspace, extra mounts, environment and command allowlists.\n";
             return 0;
         }
         if (name == "version") { std::cout << "ALT-Shell " << VERSION << " (C++17 / POSIX)\n"; return 0; }
@@ -596,7 +814,130 @@ private:
         return 2;
     }
 
+
+    bool pathIsWithin(const fs::path& root, const fs::path& candidate) const {
+        const fs::path rel = candidate.lexically_relative(root);
+        if (rel.empty()) return candidate == root;
+        return !rel.is_absolute() && *rel.begin() != "..";
+    }
+
+    bool validateRedirections(const Job& job) const {
+        if (!config_.containerEnabled) return true;
+        std::error_code ec;
+        const fs::path root = fs::weakly_canonical(fs::current_path(), ec);
+        if (ec) { std::cerr << "alt: sandbox: cannot resolve current directory\n"; return false; }
+        for (const auto& cmd : job.commands) {
+            for (const auto& redirect : {std::pair<const std::string*, bool>{&cmd.input, false}, {&cmd.output, true}, {&cmd.error, true}}) {
+                const std::string& name = *redirect.first;
+                if (name.empty()) continue;
+                if (redirect.second && !config_.workspaceWritable) {
+                    std::cerr << "alt: sandbox: output redirection disabled by container.workspace_writable=false\n";
+                    return false;
+                }
+                fs::path target = fs::path(name);
+                if (target.is_relative()) target = root / target;
+                target = target.lexically_normal();
+                ec.clear();
+                fs::path resolved;
+                if (fs::exists(target, ec)) {
+                    resolved = fs::canonical(target, ec);
+                } else {
+                    ec.clear();
+                    resolved = fs::weakly_canonical(target.parent_path(), ec) / target.filename();
+                }
+                if (ec || !pathIsWithin(root, resolved.lexically_normal())) {
+                    std::cerr << "alt: sandbox: redirections must stay inside the current workspace: " << name << '\n';
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool commandAllowed(const Command& cmd) const {
+        if (cmd.argv.empty() || config_.allowedCommands.empty() || isBuiltin(cmd.argv[0])) return true;
+        const std::string base = fs::path(cmd.argv[0]).filename().string();
+        return std::find(config_.allowedCommands.begin(), config_.allowedCommands.end(), base) != config_.allowedCommands.end();
+    }
+
+    [[noreturn]] void execSandboxed(const Command& cmd) const {
+        const fs::path cwd = fs::current_path();
+        const fs::path home = fs::weakly_canonical(homeDir());
+        if (fs::weakly_canonical(cwd) == home) {
+            std::cerr << "alt: sandbox: refusing to expose the entire home directory; cd into a project/work directory first\n";
+            _exit(126);
+        }
+        for (const auto& protectedPath : config_.readonlyPaths) {
+            std::error_code ec;
+            const fs::path protectedCanonical = fs::weakly_canonical(protectedPath, ec);
+            if (!ec && pathIsWithin(protectedCanonical, fs::weakly_canonical(cwd))) {
+                std::cerr << "alt: sandbox: current directory is inside a read-only system mount; cd into a project/work directory first\n";
+                _exit(126);
+            }
+        }
+        std::vector<std::string> args = {
+            "bwrap", "--die-with-parent", "--new-session", "--unshare-user", "--unshare-pid",
+            "--unshare-ipc", "--unshare-uts", "--disable-userns"
+        };
+        if (!config_.containerNetwork) args.push_back("--unshare-net");
+        args.insert(args.end(), {"--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"});
+
+        auto bindReadonly = [&](const std::string& source, const std::string& destination) {
+            std::error_code ec;
+            if (fs::is_directory(source, ec)) args.insert(args.end(), {"--ro-bind", source, destination});
+        };
+        for (const auto& path : config_.readonlyPaths) bindReadonly(path, path);
+        args.insert(args.end(), {"--dir", "/workspace"});
+        args.push_back(config_.workspaceWritable ? "--bind" : "--ro-bind");
+        args.push_back(cwd.string()); args.push_back("/workspace");
+
+        auto mountExtra = [&](const std::vector<std::string>& paths, bool writable, const std::string& prefix) {
+            if (paths.empty()) return;
+            args.insert(args.end(), {"--dir", "/mnt"});
+            size_t i = 0;
+            for (const auto& path : paths) {
+                std::error_code ec;
+                if (!fs::is_directory(path, ec)) {
+                    std::cerr << "alt: sandbox: configured mount is not a directory or is missing: " << path << '\n';
+                    _exit(126);
+                }
+                const std::string destination = prefix + std::to_string(i++);
+                args.insert(args.end(), {"--dir", destination, writable ? "--bind" : "--ro-bind", path, destination});
+            }
+        };
+        mountExtra(config_.extraReadonlyPaths, false, "/mnt/alt-ro-");
+        mountExtra(config_.extraWritablePaths, true, "/mnt/alt-rw-");
+        args.insert(args.end(), {"--chdir", "/workspace", "--clearenv", "--setenv", "PATH",
+                                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin",
+                                "--setenv", "HOME", "/workspace"});
+        for (const auto& key : config_.passEnvironment) {
+            if (!validName(key) || key == "HOME" || key == "PATH") continue;
+            const char* value = std::getenv(key.c_str());
+            if (value) args.insert(args.end(), {"--setenv", key, value});
+        }
+        args.push_back("--");
+        for (const auto& arg : cmd.argv) args.push_back(arg);
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (auto& arg : args) argv.push_back(arg.data());
+        argv.push_back(nullptr);
+        ::execvp(argv[0], argv.data());
+        if (errno == ENOENT) {
+            std::cerr << "alt: bubblewrap (bwrap) is missing; external commands are blocked while container.enabled=true. Install bubblewrap or explicitly set container.enabled=false.\n";
+        } else {
+            std::cerr << "alt: cannot start sandbox: " << std::strerror(errno) << '\n';
+        }
+        _exit(errno == ENOENT ? 127 : 126);
+    }
+
     int executeJob(const Job& job) {
+        if (!validateRedirections(job)) return 126;
+        for (const auto& cmd : job.commands) {
+            if (config_.containerEnabled && !commandAllowed(cmd)) {
+                std::cerr << "alt: blocked by container.allowed_commands: " << cmd.argv.front() << '\n';
+                return 126;
+            }
+        }
         if (job.commands.size() == 1 && !job.background && !job.commands[0].argv.empty() && isBuiltin(job.commands[0].argv[0])) {
             const auto& cmd = job.commands[0];
             // Parent-run builtins may still redirect their output.
@@ -669,10 +1010,19 @@ private:
                     ::dup2(fd, STDERR_FILENO); ::close(fd);
                 }
                 if (cmd.argv.empty()) _exit(0);
+                if (config_.containerEnabled && cmd.argv[0] == "env") {
+                    for (const auto& key : config_.passEnvironment) {
+                        const char* value = std::getenv(key.c_str());
+                        if (value) std::cout << key << '=' << value << '\n';
+                    }
+                    std::cout.flush();
+                    _exit(0);
+                }
                 if (isBuiltin(cmd.argv[0])) _exit(runBuiltin(cmd.argv));
                 std::vector<char*> args;
                 for (const auto& s : cmd.argv) args.push_back(const_cast<char*>(s.c_str()));
                 args.push_back(nullptr);
+                if (config_.containerEnabled) execSandboxed(cmd);
                 ::execvp(args[0], args.data());
                 std::cerr << "alt: " << args[0] << ": " << std::strerror(errno) << '\n';
                 _exit(errno == ENOENT ? 127 : 126);

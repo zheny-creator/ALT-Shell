@@ -13,19 +13,19 @@ export ALT_CAPSULE_TEST=after
 cd "$ALT_TEST_TMP/other"
 capsule diff work
 capsule load work
-printf 'loaded=%s\\n' "$ALT_CAPSULE_TEST"
-printf 'pipeline-ok\\n' | grep pipeline-ok
+printf 'loaded=%s\n' "$ALT_CAPSULE_TEST"
+printf 'pipeline-ok\n' | grep pipeline-ok
 false; echo status=$?
 sh -c 'echo captured-error >&2' 2> "$ALT_TEST_TMP/stderr.txt"
 exit
 INPUT
 )
 
-printf '%s\\n' "$OUT" | grep -q "Saved capsule 'work'"
-printf '%s\\n' "$OUT" | grep -q 'ALT_CAPSULE_TEST: current=after | saved=before'
-printf '%s\\n' "$OUT" | grep -q "Loaded capsule 'work'"
-printf '%s\\n' "$OUT" | grep -q 'loaded=before'
-printf '%s\\n' "$OUT" | grep -q 'pipeline-ok'
-printf '%s\\n' "$OUT" | grep -q 'status=1'
+printf '%s\n' "$OUT" | grep -q "Saved capsule 'work'"
+printf '%s\n' "$OUT" | grep -q 'ALT_CAPSULE_TEST: current=after | saved=before'
+printf '%s\n' "$OUT" | grep -q "Loaded capsule 'work'"
+printf '%s\n' "$OUT" | grep -q 'loaded=before'
+printf '%s\n' "$OUT" | grep -q 'pipeline-ok'
+printf '%s\n' "$OUT" | grep -q 'status=1'
 grep -q 'captured-error' "$TMP/stderr.txt"
-printf '%s\\n' 'ALT-Shell smoke tests passed.'
+printf '%s\n' 'ALT-Shell smoke tests passed.'

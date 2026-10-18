@@ -65,6 +65,8 @@ ALT-Shell exposes a shell-specific journal for companion utilities through `ALT_
 
 The journal is observability, not a universal undo mechanism: arbitrary external programs can change files in ways that cannot be reconstructed from command history alone.
 
+The proprietary companion source/binary is intentionally not stored in this repository. Place the locally built executable at `$(XDG_DATA_HOME:-$HOME/.local/share)/alt-shell/recall` with mode `0700`; the shell verifies that it is a regular file owned by the current user and not group/world-writable before dispatching companion subcommands. The companion runs as the current user and does not execute commands from the journal.
+
 ## Context capsules
 
 ```sh

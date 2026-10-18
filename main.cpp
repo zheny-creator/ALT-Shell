@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <algorithm>
 #include <cerrno>
@@ -329,6 +330,10 @@ public:
         ::chmod(dataDir().c_str(), 0700);
         loadConfig();
         loadHistory();
+        // ALT-Shell exposes a shell-specific command journal protocol for companion tools.
+        const std::string journal = (dataDir() / "recall.journal").string();
+        ::setenv("ALT_SHELL_RECALL_PROTOCOL", "ALT-RECALL/1", 1);
+        ::setenv("ALT_SHELL_RECALL_JOURNAL", journal.c_str(), 1);
         if (interactive_) {
             std::signal(SIGINT, SIG_IGN);
             std::signal(SIGQUIT, SIG_IGN);
@@ -525,6 +530,21 @@ private:
         return out.str();
     }
 
+    // Private companion-tool ABI: ALT-RECALL/1 tab-separated records.
+    // Fields: protocol, event, unix-ms, status, hex(cwd), hex(command).
+    // Hex encoding keeps arbitrary command text and paths unambiguous.
+    void journalEvent(const char* event, const std::string& command, int status) const {
+        const fs::path file = dataDir() / "recall.journal";
+        const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::ofstream out(file, std::ios::app);
+        if (!out) return; // Observability must never prevent a command from running.
+        out << "ALT-RECALL/1\t" << event << '\t' << now << '\t' << status << '\t'
+            << hexEncode(fs::current_path().string()) << '\t' << hexEncode(command) << '\n';
+        out.close();
+        ::chmod(file.c_str(), 0600);
+    }
+
     void loadHistory() {
         std::ifstream in(dataDir() / "history");
         std::string line;
@@ -559,7 +579,9 @@ private:
         if (!lexLine(raw, lastStatus_, tokens, error)) return;
         Job job;
         if (!parseJob(tokens, background, job, error)) return;
+        journalEvent("BEGIN", raw, -1);
         lastStatus_ = executeJob(job);
+        journalEvent("END", raw, lastStatus_);
     }
 
     void executeLine(const std::string& line, std::string& error) {
@@ -607,6 +629,8 @@ private:
                       << "  capsule diff NAME           compare it with the current context\n"
                       << "  history [N]           show recent commands\n"
                       << "  recall TEXT           find commands in history containing TEXT\n"
+                      << "  Companion API: ALT_SHELL_RECALL_PROTOCOL=ALT-RECALL/1\n"
+                      << "  Event journal: $XDG_DATA_HOME/alt-shell/recall.journal (mode 0600)\n"
                       << "  env                   print environment variables\n"
                       << "  export NAME=VALUE     set an environment variable for this shell\n"
                       << "  pwd, clear, version, help, exit\n\n"

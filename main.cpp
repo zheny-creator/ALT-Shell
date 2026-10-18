@@ -616,6 +616,7 @@ private:
                       << "  capsule diff NAME           compare it with the current context\n"
                       << "  history [N]           show recent commands\n"
                       << "  recall TEXT           find commands in history containing TEXT\n"
+                      << "  sentinel [COMMAND]    inspect Linux kernel/system telemetry (private companion)\n"
                       << "  Companion API: ALT_SHELL_RECALL_PROTOCOL=ALT-RECALL/1\n"
                       << "  Event journal: $XDG_DATA_HOME/alt-shell/recall.journal (mode 0600)\n"
                       << "  env                   print environment variables\n"
@@ -680,8 +681,8 @@ private:
                 "status", "memory", "processes", "events", "explain", "watch", "doctor", "help"
             };
             if (a.size() > 1 && std::find(allowed.begin(), allowed.end(), a[1]) == allowed.end()) {
-                std::cerr << "sentinel: unsupported subcommand: " << a[1] << "\\n";
-                std::cerr << "Usage: sentinel [status|memory|processes|events|explain|watch|doctor|help]\\n";
+                std::cerr << "sentinel: unsupported subcommand: " << a[1] << "\n";
+                std::cerr << "Usage: sentinel [status|memory|processes|events|explain|watch|doctor|help]\n";
                 return 2;
             }
             const fs::path companion = dataDir() / "sentinel";
@@ -690,12 +691,12 @@ private:
                 st.st_uid != getuid() || (st.st_mode & (S_IWGRP | S_IWOTH)) ||
                 !(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
                 std::cerr << "sentinel: proprietary companion is missing or has unsafe permissions: "
-                          << companion << "\\n";
-                std::cerr << "Install the private sentinel executable there with mode 0700.\\n";
+                          << companion << "\n";
+                std::cerr << "Install the private sentinel executable there with mode 0700.\n";
                 return 127;
             }
             pid_t pid = ::fork();
-            if (pid < 0) { std::cerr << "sentinel: fork: " << std::strerror(errno) << '\\n'; return 1; }
+            if (pid < 0) { std::cerr << "sentinel: fork: " << std::strerror(errno) << '\n'; return 1; }
             if (pid == 0) {
                 std::string companionArg0 = companion.string();
                 std::vector<char*> args;
@@ -703,13 +704,13 @@ private:
                 for (size_t i = 1; i < a.size(); ++i) args.push_back(const_cast<char*>(a[i].c_str()));
                 args.push_back(nullptr);
                 ::execv(companion.c_str(), args.data());
-                std::cerr << "sentinel: exec: " << std::strerror(errno) << '\\n';
+                std::cerr << "sentinel: exec: " << std::strerror(errno) << '\n';
                 _exit(127);
             }
             int status = 0;
             while (::waitpid(pid, &status, 0) < 0) {
                 if (errno == EINTR) continue;
-                std::cerr << "sentinel: waitpid: " << std::strerror(errno) << '\\n';
+                std::cerr << "sentinel: waitpid: " << std::strerror(errno) << '\n';
                 return 1;
             }
             if (WIFEXITED(status)) return WEXITSTATUS(status);

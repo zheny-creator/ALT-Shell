@@ -697,8 +697,8 @@ private:
                 if (::stat(companion.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
                     st.st_uid != getuid() || (st.st_mode & (S_IWGRP | S_IWOTH))) {
                     std::cerr << "recall: proprietary companion is missing or has unsafe permissions: "
-                              << companion << "\\n";
-                    std::cerr << "Build the private recall.cpp and install it there with mode 0700.\\n";
+                              << companion << "\n";
+                    std::cerr << "Build the private recall.cpp and install it there with mode 0700.\n";
                     return 127;
                 }
                 pid_t pid = ::fork();
@@ -718,7 +718,7 @@ private:
                 if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
                 return 1;
             }
-            if (a.size() < 2) { std::cerr << "usage: recall TEXT | recall timeline|search|last|status|checkpoint|restore|undo ...\\n"; return 2; }
+            if (a.size() < 2) { std::cerr << "usage: recall TEXT | recall timeline|search|last|status|checkpoint|restore|undo ...\n"; return 2; }
             std::string needle;
             for (size_t i = 1; i < a.size(); ++i) { if (!needle.empty()) needle += ' '; needle += a[i]; }
             size_t found = 0;

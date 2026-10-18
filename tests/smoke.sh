@@ -44,6 +44,12 @@ printf '%s\n' "$OUT" | grep -q "Loaded capsule 'work'"
 printf '%s\n' "$OUT" | grep -q 'loaded=before'
 printf '%s\n' "$OUT" | grep -q 'pipeline-ok'
 printf '%s\n' "$OUT" | grep -q 'status=1'
+printf '%s\n' "$OUT" | grep -q 'and-ok'
+! printf '%s\n' "$OUT" | grep -q 'and-bad'
+printf '%s\n' "$OUT" | grep -q 'or-ok'
+! printf '%s\n' "$OUT" | grep -q 'or-bad'
+printf '%s\n' "$OUT" | grep -q 'fallback'
+printf '%s\n' "$OUT" | grep -q 'left-to-right-ok'
 grep -q 'captured-error' "$TMP/work/stderr.txt"
 
 # Check that sandbox-mode policies are applied before forking a command, and that a

@@ -65,6 +65,39 @@ ALT-Shell exposes a shell-specific journal for companion utilities through `ALT_
 
 The journal is observability, not a universal undo mechanism: arbitrary external programs can change files in ways that cannot be reconstructed from command history alone. The proprietary companion source/binary is intentionally not stored in this repository. Place the locally built executable at `${XDG_DATA_HOME:-$HOME/.local/share}/alt-shell/recall` with mode `0700`; the shell verifies that it is a regular file owned by the current user and not group/world-writable before dispatching companion subcommands. The companion runs as the current user and does not execute commands from the journal.
 
+## Proprietary Linux kernel companion: sentinel
+
+ALT-Shell can dispatch the separately distributed proprietary `sentinel` companion. Its source and binary are intentionally **not** stored in this public repository.
+
+The shell-side integration is only a launcher: it does not itself read kernel telemetry, elevate privileges, or load kernel modules. The companion is expected to run as the current user and read only interfaces available to that user, such as `/proc`, `/sys`, and PSI where supported. Access to privileged tracing interfaces is not assumed.
+
+Install the private executable at:
+
+```sh
+${XDG_DATA_HOME:-$HOME/.local/share}/alt-shell/sentinel
+```
+
+Set permissions so only the owner can access and execute it:
+
+```sh
+chmod 700 "${XDG_DATA_HOME:-$HOME/.local/share}/alt-shell/sentinel"
+```
+
+ALT-Shell verifies that the path is a regular executable file owned by the current user and is not group/world-writable. The launcher accepts these subcommands:
+
+```sh
+sentinel status
+sentinel memory
+sentinel processes
+sentinel events
+sentinel explain
+sentinel watch
+sentinel doctor
+sentinel help
+```
+
+These are the public command names expected by the integration; the private companion implementation is developed separately. The initial design is read-only: no automatic process termination, kernel parameter changes, module loading, or privilege escalation. Any event correlation should distinguish directly observed measurements from hypotheses.
+
 ## Context capsules
 
 ```sh

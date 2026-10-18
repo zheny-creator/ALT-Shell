@@ -7,7 +7,7 @@ ALT-Shell is an experimental Linux command shell written in C++17. It has a smal
 - **Arrow-key editing**: Up/Down command history; Left/Right cursor movement; Home/End; Delete/Backspace; Ctrl+A/E/U/K/W/L.
 - External programs through `fork`/`execvp`, with sandboxing through `bwrap` enabled by default.
 - **Configurable sandbox**: private user/PID/IPC/UTS namespaces, network isolated by default, selected read-only system directories, a selected workspace, limited environment variables, optional command allowlist, and extra read-only/writable mounts.
-- Pipelines (`|`), input/output redirection (`<`, `>`, `>>`, `2>`), command separators (`;`) and background launch (`&`).
+- Pipelines (`|`), conditional chaining (`&&`, `||`), input/output redirection (`<`, `>`, `>>`, `2>`), command separators (`;`) and background launch (`&`).
 - Quotes, escapes, `$NAME`, `${NAME}`, `$?`, `$$`, and `~` expansion.
 - Built-ins: `cd`, `pwd`, `back`, `croot`, `history`, `recall`, `env`, `export`, `capsule`, `clear`, `version`, `help`, `exit`.
 - Persistent command history (last 2,000 lines).

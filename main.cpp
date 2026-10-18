@@ -687,14 +687,43 @@ private:
             return 0;
         }
         if (name == "recall") {
-            if (a.size() < 2) { std::cerr << "usage: recall TEXT\n"; return 2; }
+            if (a.size() >= 2 && (a[1] == "timeline" || a[1] == "search" || a[1] == "last" ||
+                                  a[1] == "status" || a[1] == "checkpoint" || a[1] == "restore" ||
+                                  a[1] == "undo")) {
+                // Companion runs from the per-user ALT-Shell data directory; it consumes only
+                // the shell's journal protocol and never executes the recorded commands.
+                const fs::path companion = dataDir() / "recall";
+                struct stat st{};
+                if (::stat(companion.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
+                    st.st_uid != getuid() || (st.st_mode & (S_IWGRP | S_IWOTH))) {
+                    std::cerr << "recall: proprietary companion is missing or has unsafe permissions: "
+                              << companion << "\\n";
+                    std::cerr << "Build the private recall.cpp and install it there with mode 0700.\\n";
+                    return 127;
+                }
+                pid_t pid = ::fork();
+                if (pid < 0) { std::cerr << "recall: fork: " << std::strerror(errno) << '\\n'; return 1; }
+                if (pid == 0) {
+                    std::vector<char*> args;
+                    for (size_t i = 1; i < a.size(); ++i) args.push_back(const_cast<char*>(a[i].c_str()));
+                    args.push_back(nullptr);
+                    ::execv(companion.c_str(), args.data());
+                    _exit(errno == ENOENT ? 127 : 126);
+                }
+                int status = 0;
+                while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+                if (WIFEXITED(status)) return WEXITSTATUS(status);
+                if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+                return 1;
+            }
+            if (a.size() < 2) { std::cerr << "usage: recall TEXT | recall timeline|search|last|status|checkpoint|restore|undo ...\\n"; return 2; }
             std::string needle;
             for (size_t i = 1; i < a.size(); ++i) { if (!needle.empty()) needle += ' '; needle += a[i]; }
             size_t found = 0;
             for (size_t i = 0; i < history_.size(); ++i) if (history_[i].find(needle) != std::string::npos) {
-                std::cout << (i + 1) << "  " << history_[i] << '\n'; ++found;
+                std::cout << (i + 1) << "  " << history_[i] << '\\n'; ++found;
             }
-            if (!found) std::cout << "No history entries contain: " << needle << '\n';
+            if (!found) std::cout << "No history entries contain: " << needle << '\\n';
             return 0;
         }
         if (name == "env") {

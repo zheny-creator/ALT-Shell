@@ -586,6 +586,7 @@ private:
 
     void executeLine(const std::string& line, std::string& error) {
         enum class Quote { None, Single, Double } quote = Quote::None;
+        enum class Next { Always, OnSuccess, OnFailure } next = Next::Always;
         size_t begin = 0;
         for (size_t i = 0; i < line.size(); ++i) {
             const char c = line[i];
@@ -594,21 +595,7 @@ private:
                 continue;
             }
             if (quote == Quote::Double) {
-                if (c == '\\' && i + 1 < line.size() && (line[i + 1] == '"' || line[i + 1] == '\\' || line[i + 1] == '$')) { ++i; continue; }
-                if (c == '"') quote = Quote::None;
-                continue;
-            }
-            if (c == '\\') { if (i + 1 < line.size()) ++i; continue; }
-            if (c == '\'') { quote = Quote::Single; continue; }
-            if (c == '"') { quote = Quote::Double; continue; }
-            if (c == ';' || c == '&') {
-                executeChunk(line.substr(begin, i - begin), c == '&', error);
-                if (!error.empty() || shouldExit_) return;
-                begin = i + 1;
-            }
-        }
-        if (!shouldExit_ && error.empty()) executeChunk(line.substr(begin), false, error);
-    }
+                if (c == '\\' && i + 1 < line.size() && (line[i + 1] == '"' || line[i + 1] == '\\' || line[i + 1] == '
 
     int runBuiltin(const std::vector<std::string>& a) {
         if (a.empty()) return 0;
@@ -702,7 +689,7 @@ private:
                     return 127;
                 }
                 pid_t pid = ::fork();
-                if (pid < 0) { std::cerr << "recall: fork: " << std::strerror(errno) << '\\n'; return 1; }
+                if (pid < 0) { std::cerr << "recall: fork: " << std::strerror(errno) << '\n'; return 1; }
                 if (pid == 0) {
                     std::string companionArg0 = companion.string();
                     std::vector<char*> args;
@@ -723,9 +710,9 @@ private:
             for (size_t i = 1; i < a.size(); ++i) { if (!needle.empty()) needle += ' '; needle += a[i]; }
             size_t found = 0;
             for (size_t i = 0; i < history_.size(); ++i) if (history_[i].find(needle) != std::string::npos) {
-                std::cout << (i + 1) << "  " << history_[i] << '\\n'; ++found;
+                std::cout << (i + 1) << "  " << history_[i] << '\n'; ++found;
             }
-            if (!found) std::cout << "No history entries contain: " << needle << '\\n';
+            if (!found) std::cout << "No history entries contain: " << needle << '\n';
             return 0;
         }
         if (name == "env") {

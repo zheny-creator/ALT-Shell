@@ -27,6 +27,12 @@ capsule load work
 printf 'loaded=%s\n' "$ALT_CAPSULE_TEST"
 printf 'pipeline-ok\n' | grep pipeline-ok
 false; echo status=$?
+true && echo and-ok
+false && echo and-bad
+false || echo or-ok
+true || echo or-bad
+false && echo skipped || echo fallback
+true || echo skipped && echo left-to-right-ok
 sh -c 'echo captured-error >&2' 2> "$ALT_TEST_TMP/work/stderr.txt"
 exit
 INPUT
@@ -38,6 +44,12 @@ printf '%s\n' "$OUT" | grep -q "Loaded capsule 'work'"
 printf '%s\n' "$OUT" | grep -q 'loaded=before'
 printf '%s\n' "$OUT" | grep -q 'pipeline-ok'
 printf '%s\n' "$OUT" | grep -q 'status=1'
+printf '%s\n' "$OUT" | grep -q 'and-ok'
+! printf '%s\n' "$OUT" | grep -q 'and-bad'
+printf '%s\n' "$OUT" | grep -q 'or-ok'
+! printf '%s\n' "$OUT" | grep -q 'or-bad'
+printf '%s\n' "$OUT" | grep -q 'fallback'
+printf '%s\n' "$OUT" | grep -q 'left-to-right-ok'
 grep -q 'captured-error' "$TMP/work/stderr.txt"
 
 # Check that sandbox-mode policies are applied before forking a command, and that a

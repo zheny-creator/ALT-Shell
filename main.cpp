@@ -595,7 +595,49 @@ private:
                 continue;
             }
             if (quote == Quote::Double) {
-                if (c == '\\' && i + 1 < line.size() && (line[i + 1] == '"' || line[i + 1] == '\\' || line[i + 1] == '
+                if (c == '\\' && i + 1 < line.size()) {
+                    ++i;
+                    continue;
+                }
+                if (c == '"') quote = Quote::None;
+                continue;
+            }
+            if (c == '\'') {
+                quote = Quote::Single;
+                continue;
+            }
+            if (c == '"') {
+                quote = Quote::Double;
+                continue;
+            }
+
+            Next separator = Next::Always;
+            size_t separatorLength = 0;
+            if (c == ';') {
+                separator = Next::Always;
+                separatorLength = 1;
+            } else if (c == '&' && i + 1 < line.size() && line[i + 1] == '&') {
+                separator = Next::OnSuccess;
+                separatorLength = 2;
+            } else if (c == '|' && i + 1 < line.size() && line[i + 1] == '|') {
+                separator = Next::OnFailure;
+                separatorLength = 2;
+            }
+            if (separatorLength == 0) continue;
+
+            const bool shouldRun = next == Next::Always ||
+                (next == Next::OnSuccess && lastStatus_ == 0) ||
+                (next == Next::OnFailure && lastStatus_ != 0);
+            if (shouldRun) executeChunk(line.substr(begin, i - begin), false, error);
+            next = separator;
+            i += separatorLength - 1;
+            begin = i + 1;
+        }
+        const bool shouldRun = next == Next::Always ||
+            (next == Next::OnSuccess && lastStatus_ == 0) ||
+            (next == Next::OnFailure && lastStatus_ != 0);
+        if (shouldRun) executeChunk(line.substr(begin), false, error);
+    }
 
     int runBuiltin(const std::vector<std::string>& a) {
         if (a.empty()) return 0;

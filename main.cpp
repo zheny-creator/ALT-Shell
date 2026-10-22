@@ -595,7 +595,49 @@ private:
                 continue;
             }
             if (quote == Quote::Double) {
-                if (c == '\\' && i + 1 < line.size() && (line[i + 1] == '"' || line[i + 1] == '\\' || line[i + 1] == '
+                if (c == '\\' && i + 1 < line.size()) {
+                    ++i;
+                    continue;
+                }
+                if (c == '"') quote = Quote::None;
+                continue;
+            }
+            if (c == '\'') {
+                quote = Quote::Single;
+                continue;
+            }
+            if (c == '"') {
+                quote = Quote::Double;
+                continue;
+            }
+
+            Next separator = Next::Always;
+            size_t separatorLength = 0;
+            if (c == ';') {
+                separator = Next::Always;
+                separatorLength = 1;
+            } else if (c == '&' && i + 1 < line.size() && line[i + 1] == '&') {
+                separator = Next::OnSuccess;
+                separatorLength = 2;
+            } else if (c == '|' && i + 1 < line.size() && line[i + 1] == '|') {
+                separator = Next::OnFailure;
+                separatorLength = 2;
+            }
+            if (separatorLength == 0) continue;
+
+            const bool shouldRun = next == Next::Always ||
+                (next == Next::OnSuccess && lastStatus_ == 0) ||
+                (next == Next::OnFailure && lastStatus_ != 0);
+            if (shouldRun) executeChunk(line.substr(begin, i - begin), false, error);
+            next = separator;
+            i += separatorLength - 1;
+            begin = i + 1;
+        }
+        const bool shouldRun = next == Next::Always ||
+            (next == Next::OnSuccess && lastStatus_ == 0) ||
+            (next == Next::OnFailure && lastStatus_ != 0);
+        if (shouldRun) executeChunk(line.substr(begin), false, error);
+    }
 
     int runBuiltin(const std::vector<std::string>& a) {
         if (a.empty()) return 0;
@@ -616,6 +658,7 @@ private:
                       << "  capsule diff NAME           compare it with the current context\n"
                       << "  history [N]           show recent commands\n"
                       << "  recall TEXT           find commands in history containing TEXT\n"
+                      << "  sentinel [COMMAND]    inspect Linux kernel/system telemetry (private companion)\n"
                       << "  Companion API: ALT_SHELL_RECALL_PROTOCOL=ALT-RECALL/1\n"
                       << "  Event journal: $XDG_DATA_HOME/alt-shell/recall.journal (mode 0600)\n"
                       << "  env                   print environment variables\n"
@@ -672,6 +715,49 @@ private:
             const size_t begin = history_.size() > count ? history_.size() - count : 0;
             for (size_t i = begin; i < history_.size(); ++i) std::cout << (i + 1) << "  " << history_[i] << '\n';
             return 0;
+        }
+        if (name == "sentinel") {
+            // The proprietary kernel-observation companion is intentionally distributed separately.
+            // It reads Linux interfaces as the current user and must not be run through the shell sandbox.
+            static const std::vector<std::string> allowed = {
+                "status", "memory", "processes", "events", "explain", "watch", "doctor", "help"
+            };
+            if (a.size() > 1 && std::find(allowed.begin(), allowed.end(), a[1]) == allowed.end()) {
+                std::cerr << "sentinel: unsupported subcommand: " << a[1] << "\n";
+                std::cerr << "Usage: sentinel [status|memory|processes|events|explain|watch|doctor|help]\n";
+                return 2;
+            }
+            const fs::path companion = dataDir() / "sentinel";
+            struct stat st{};
+            if (::stat(companion.c_str(), &st) != 0 || !S_ISREG(st.st_mode) ||
+                st.st_uid != getuid() || (st.st_mode & (S_IWGRP | S_IWOTH)) ||
+                !(st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
+                std::cerr << "sentinel: proprietary companion is missing or has unsafe permissions: "
+                          << companion << "\n";
+                std::cerr << "Install the private sentinel executable there with mode 0700.\n";
+                return 127;
+            }
+            pid_t pid = ::fork();
+            if (pid < 0) { std::cerr << "sentinel: fork: " << std::strerror(errno) << '\n'; return 1; }
+            if (pid == 0) {
+                std::string companionArg0 = companion.string();
+                std::vector<char*> args;
+                args.push_back(companionArg0.data());
+                for (size_t i = 1; i < a.size(); ++i) args.push_back(const_cast<char*>(a[i].c_str()));
+                args.push_back(nullptr);
+                ::execv(companion.c_str(), args.data());
+                std::cerr << "sentinel: exec: " << std::strerror(errno) << '\n';
+                _exit(127);
+            }
+            int status = 0;
+            while (::waitpid(pid, &status, 0) < 0) {
+                if (errno == EINTR) continue;
+                std::cerr << "sentinel: waitpid: " << std::strerror(errno) << '\n';
+                return 1;
+            }
+            if (WIFEXITED(status)) return WEXITSTATUS(status);
+            if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+            return 1;
         }
         if (name == "recall") {
             if (a.size() >= 2 && (a[1] == "timeline" || a[1] == "search" || a[1] == "last" ||
